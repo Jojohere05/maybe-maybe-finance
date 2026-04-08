@@ -9,6 +9,101 @@ on:
 
 jobs:
   scan:
-    uses: Jojohere05/PBL-2/.github/workflows/finguard-api-local.yml@main
-    with:
-      repo: ${{ github.repository }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+
+      - name: Checkout FinGuard engine (PBL-2)
+        uses: actions/checkout@v4
+        with:
+          repository: Jojohere05/PBL-2
+          path: finguard
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install FinGuard dependencies
+        working-directory: finguard
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start FastAPI backend (uvicorn)
+        working-directory: finguard
+        env:
+          PORT: "8000"
+        run: |
+          nohup python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT} > uvicorn.log 2>&1 &
+          # Wait for backend health endpoint to be ready
+          for i in {1..30}; do
+            if curl -fsS "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
+              echo "Backend is up on 8000";
+              break;
+            fi
+            echo "Waiting for backend...";
+            sleep 1;
+          done
+
+      - name: Install and configure Nginx reverse proxy
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y nginx
+          # Minimal proxy config to forward /api/ to uvicorn on 8000
+          sudo tee /etc/nginx/conf.d/finguard.conf > /dev/null << 'EOF'
+          server {
+              listen 80;
+              server_name localhost;
+
+              location /api/ {
+                  proxy_pass http://127.0.0.1:8000/api/;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+          EOF
+
+          sudo nginx -s reload || sudo service nginx restart
+
+      - name: Zip current repository
+        run: |
+          echo "Zipping workspace..."
+          zip -r repo.zip . \
+            -x ".git/*" "finguard/*" "node_modules/*" "dist/*" "build/*" "__pycache__/*"
+
+      - name: Call FinGuard API via Nginx
+        run: |
+          STATUS=$(curl -sS -L -w "%{http_code}" -o finguard-result.json \
+            -X POST \
+            -F "file=@repo.zip" \
+            "http://127.0.0.1/api/scan/")
+
+          echo "HTTP status: ${STATUS}"
+          echo "Raw response from FinGuard API (via Nginx):"
+          cat finguard-result.json || true
+
+          if [ "${STATUS}" != "200" ]; then
+            echo "FinGuard API returned non-200 HTTP status ${STATUS}" >&2
+            exit 1
+          fi
+
+      - name: Print FinGuard summary (backend JSON)
+        working-directory: finguard
+        run: |
+          cp ../finguard-result.json ./finguard-result.json
+          python scripts/print_finguard_summary.py
+
+      - name: Upload JSON result artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: finguard-result
+          path: |
+            finguard/finguard-result.json
+            finguard/test_results/*.json
