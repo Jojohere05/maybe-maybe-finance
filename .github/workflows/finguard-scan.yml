@@ -25,7 +25,7 @@ jobs:
           BACKEND_URL: ${{ secrets.FINGUARD_API_URL }}
         run: |
           if [ -z "${BACKEND_URL}" ]; then
-            echo "FINGUARD_API_URL is not set. Configure it as a repository secret pointing to your FinGuard backend (e.g. https://pbl-2-1dlb.onrender.com)." >&2
+            echo "FINGUARD_API_URL is not set. Configure it as a repository secret (e.g. https://pbl-2-1dlb.onrender.com)." >&2
             exit 1
           fi
 
@@ -69,14 +69,14 @@ print(f"    MEDIUM   : {by_sev.get('MEDIUM', 0)}")
 print(f"    LOW      : {by_sev.get('LOW', 0)}")
 
 if decision.upper() == 'BLOCK':
-    print("\n  🚫 Pipeline BLOCKED - fix CRITICAL issues before merge")
+    print("\n  Pipeline BLOCKED - fix CRITICAL issues before merge")
     sys.exit(1)
 elif decision.upper() == 'REVIEW':
-    print("\n  🔍 REVIEW required (non-blocking for now)")
+    print("\n  REVIEW required (non-blocking for now)")
 elif decision.upper() == 'WARN':
-    print("\n  ⚠️  WARNING - not blocking, but review recommended")
+    print("\n  WARNING - not blocking, but review recommended")
 else:
-    print("\n  ✅ ALLOW - all checks passed")
+    print("\n  ALLOW - all checks passed")
 PY
 
       - name: Upload JSON result artifact
@@ -85,54 +85,3 @@ PY
         with:
           name: finguard-result
           path: finguard-result.json
-
-      - name: Comment on PR with summary
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-
-            let result;
-            try {
-              result = JSON.parse(fs.readFileSync('finguard-result.json', 'utf8'));
-            } catch (e) {
-              core.warning(`Could not read finguard-result.json: ${e}`);
-              result = { risk_score: 'N/A', decision: 'unknown', summary: { by_severity: {} } };
-            }
-
-            const bySev = result.summary?.by_severity || {};
-
-            const body = `## 🔒 FinGuard Security Scan Results
-
-            | Severity | Count |
-            |----------|-------|
-            | 🔴 Critical | ${bySev.CRITICAL || 0} |
-            | 🟠 High | ${bySev.HIGH || 0} |
-            | 🟡 Medium | ${bySev.MEDIUM || 0} |
-            | 🟢 Low | ${bySev.LOW || 0} |
-
-            **Risk Score:** ${result.risk_score}/100
-            **Decision:** ${result.decision}
-
-            
-            <details>
-            <summary>Raw JSON output</summary>
-
-            
-            
-            \`${JSON.stringify(result)}\`
-            
-            </details>
-
-            ---
-            *Powered by FinGuard Compliance Scanner*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
-
-      # Optional email step stays commented out
