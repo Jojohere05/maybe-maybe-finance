@@ -1,87 +1,14 @@
-name: FinGuard Security Scan
+name: FinGuard Compliance Scan
 
 on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Zip repository (exclude heavy folders)
-        run: |
-          zip -r repo.zip . \
-            -x "*.git*" "node_modules/*" "frontend/node_modules/*" "venv/*" "dist/*" "build/*" "__pycache__/*"
-
-      - name: Call FinGuard backend API
-        env:
-          BACKEND_URL: ${{ secrets.FINGUARD_API_URL }}
-        run: |
-          if [ -z "${BACKEND_URL}" ]; then
-            echo "FINGUARD_API_URL is not set. Configure it as a repository secret (e.g. https://pbl-2-1dlb.onrender.com)." >&2
-            exit 1
-          fi
-
-          echo "Calling FinGuard at: ${BACKEND_URL}/api/scan/"
-
-          STATUS=$(curl -sS -L -w "%{http_code}" -o finguard-result.json \
-            -X POST \
-            -F "file=@repo.zip" \
-            "${BACKEND_URL%/}/api/scan/")
-
-          echo "HTTP status: ${STATUS}"
-          echo "Raw response from FinGuard:"
-          cat finguard-result.json || true
-
-          if [ "${STATUS}" != "200" ]; then
-            echo "FinGuard returned non-200 HTTP status ${STATUS}"
-            exit 1
-          fi
-
-          python - << 'PY'
-import json, sys
-
-with open('finguard-result.json', 'r', encoding='utf-8') as f:
-    data = json.load(f)
-
-decision = data.get('decision', 'ALLOW')
-score = data.get('risk_score', 0)
-summary = data.get('summary', {}) or {}
-by_sev = summary.get('by_severity', {}) or {}
-
-print("\n" + "=" * 58)
-print("  FinGuard Compliance Scan")
-print("=" * 58)
-print(f"  Risk Score : {score}/100")
-print(f"  Decision   : {decision}")
-
-print("\n  Violations:")
-print(f"    CRITICAL : {by_sev.get('CRITICAL', 0)}")
-print(f"    HIGH     : {by_sev.get('HIGH', 0)}")
-print(f"    MEDIUM   : {by_sev.get('MEDIUM', 0)}")
-print(f"    LOW      : {by_sev.get('LOW', 0)}")
-
-if decision.upper() == 'BLOCK':
-    print("\n  Pipeline BLOCKED - fix CRITICAL issues before merge")
-    sys.exit(1)
-elif decision.upper() == 'REVIEW':
-    print("\n  REVIEW required (non-blocking for now)")
-elif decision.upper() == 'WARN':
-    print("\n  WARNING - not blocking, but review recommended")
-else:
-    print("\n  ALLOW - all checks passed")
-PY
-
-      - name: Upload JSON result artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: finguard-result
-          path: finguard-result.json
+    uses: Jojohere05/PBL-2/.github/workflows/finguard-api-local.yml@main
+    with:
+      repo: ${{ github.repository }}
